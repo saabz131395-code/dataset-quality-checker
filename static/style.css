@@ -45,6 +45,13 @@ a { color: var(--brand); }
 
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
 
+.topbar-left { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.home-link {
+  color: #9fb0cc; text-decoration: none; font-size: 14px; font-weight: 600;
+  padding: 6px 12px; border: 1px solid #34405a; border-radius: 8px;
+}
+.home-link:hover { color: #fff; border-color: #5b6a88; }
+
 /* ---------- Buttons ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;

@@ -21,8 +21,11 @@
 
 <header class="topbar">
   <div class="wrap">
-    <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark">DQ</span> Dataset Quality Checker</a>
-    <div style="display:flex; gap:8px;">
+    <div class="topbar-left">
+      {% if request.script_root %}<a class="home-link" href="{{ request.script_root.rsplit('/', 1)[0] or '/' }}">&larr; All projects</a>{% endif %}
+      <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark">DQ</span> Dataset Quality Checker</a>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
       <button class="btn btn-dark-ghost" id="downloadJson" type="button">Download report (JSON)</button>
       <a class="btn btn-primary" href="{{ url_for('index') }}">Check another file</a>
     </div>
