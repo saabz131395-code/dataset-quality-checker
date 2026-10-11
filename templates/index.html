@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dataset Quality Checker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark">DQ</span> Dataset Quality Checker</a>
+    <span class="tag">validate before you train</span>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <div>
+      <h1>Is your dataset ready for machine learning?</h1>
+      <p class="lead">Upload a CSV and get an instant validation report with clear pass, warning and fail results, plus concrete steps to fix each problem.</p>
+      <ul class="check-list">
+        <li><span class="dot">✓</span> Missing values and empty columns</li>
+        <li><span class="dot">✓</span> Duplicate rows and constant features</li>
+        <li><span class="dot">✓</span> Infinite values (common in network-traffic datasets)</li>
+        <li><span class="dot">✓</span> Outliers, class imbalance and redundant features</li>
+        <li><span class="dot">✓</span> An overall quality score out of 100</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+      <div id="clientError" class="alert alert-error" style="display:none"></div>
+
+      <form id="uploadForm" action="{{ url_for('analyze_file') }}" method="post" enctype="multipart/form-data">
+        <label id="dropzone" class="dropzone" for="file" tabindex="0" role="button" aria-label="Choose a CSV file">
+          <div class="icon">⬆</div>
+          <strong>Drop your CSV here or click to browse</strong>
+          <small>.csv files up to 10 MB</small>
+        </label>
+        <input id="file" type="file" name="file" accept=".csv" hidden>
+
+        <div id="fileChip" class="file-chip">
+          <span class="name" id="fileName"></span>
+          <span class="muted" id="fileSize"></span>
+          <button type="button" id="clearFile" title="Remove file">×</button>
+        </div>
+
+        <div id="previewBox" class="preview-box">
+          <h3>Preview (first 5 rows)</h3>
+          <div class="table-scroll"><table class="data" id="previewTable"></table></div>
+        </div>
+
+        <div class="field">
+          <label for="label_col">Label / target column</label>
+          <select id="label_col" name="label_col" disabled>
+            <option value="">Choose a file first</option>
+          </select>
+          <div class="hint">Used to check class balance. Leave as "None" if your data has no labels.</div>
+        </div>
+
+        <div class="actions">
+          <button id="submitBtn" class="btn btn-primary" type="submit" disabled>Run quality check</button>
+          {% if has_sample %}
+            <a class="btn btn-ghost" href="{{ url_for('sample') }}">Try sample data</a>
+          {% endif %}
+        </div>
+        <p class="privacy">Files are analysed in memory and are never stored on the server.</p>
+      </form>
+    </div>
+  </section>
+</main>
+
+<footer>Built with Python, Flask and pandas · Saba Nawaz</footer>
+
+<script>
+  const MAX_BYTES = 10 * 1024 * 1024;
+  const LABEL_GUESSES = ["label", "class", "target", "attack", "attack_cat", "y", "category", "outcome"];
+
+  const input = document.getElementById("file");
+  const dropzone = document.getElementById("dropzone");
+  const chip = document.getElementById("fileChip");
+  const errBox = document.getElementById("clientError");
+  const select = document.getElementById("label_col");
+  const submitBtn = document.getElementById("submitBtn");
+  const previewBox = document.getElementById("previewBox");
+  const previewTable = document.getElementById("previewTable");
+
+  function showError(msg) { errBox.textContent = msg; errBox.style.display = msg ? "block" : "none"; }
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1024 / 1024).toFixed(2) + " MB";
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function reset() {
+    input.value = "";
+    chip.classList.remove("show");
+    previewBox.classList.remove("show");
+    select.innerHTML = '<option value="">Choose a file first</option>';
+    select.disabled = true;
+    submitBtn.disabled = true;
+  }
+
+  function handleFile(file) {
+    showError("");
+    if (!file) return reset();
+    if (!file.name.toLowerCase().endsWith(".csv")) { reset(); return showError("Only .csv files are supported."); }
+    if (file.size > MAX_BYTES) { reset(); return showError("File is too large. Maximum size is 10 MB."); }
+
+    document.getElementById("fileName").textContent = file.name;
+    document.getElementById("fileSize").textContent = formatSize(file.size);
+    chip.classList.add("show");
+
+    // Read only the first 64 KB in the browser to build the preview and the column list
+    const reader = new FileReader();
+    reader.onload = () => {
+      const lines = reader.result.split(/\r?\n/).filter(l => l.trim() !== "").slice(0, 6);
+      if (!lines.length) { reset(); return showError("The file looks empty."); }
+      const delim = detectDelimiter(lines[0]);
+      const rows = lines.map(l => parseCsvLine(l, delim));
+      const header = rows[0];
+
+      let html = "<thead><tr>" + header.map(h => `<th>${escapeHtml(h)}</th>`).join("") + "</tr></thead><tbody>";
+      rows.slice(1).forEach(r => {
+        html += "<tr>" + header.map((_, i) => {
+          const v = r[i] ?? "";
+          return v === "" ? '<td class="empty"></td>' : `<td>${escapeHtml(v)}</td>`;
+        }).join("") + "</tr>";
+      });
+      previewTable.innerHTML = html + "</tbody>";
+      previewBox.classList.add("show");
+
+      // Fill the label dropdown and pre-select a likely label column
+      select.innerHTML = '<option value="">None (skip class balance)</option>' +
+        header.map(h => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`).join("");
+      const guess = header.find(h => LABEL_GUESSES.includes(String(h).trim().toLowerCase()));
+      if (guess) select.value = guess;
+      select.disabled = false;
+      submitBtn.disabled = false;
+    };
+    reader.onerror = () => { reset(); showError("Could not read this file in the browser."); };
+    reader.readAsText(file.slice(0, 64 * 1024));
+  }
+
+  // Pick the separator that appears most often in the header line
+  function detectDelimiter(headerLine) {
+    let best = ",", bestCount = 0;
+    [",", ";", "\t", "|"].forEach(d => {
+      const count = headerLine.split(d).length - 1;
+      if (count > bestCount) { best = d; bestCount = count; }
+    });
+    return best;
+  }
+
+  // Split one CSV line into fields, respecting "quoted, values"
+  function parseCsvLine(line, delim = ",") {
+    const out = []; let cur = ""; let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+        else if (ch === '"') inQuotes = false;
+        else cur += ch;
+      } else if (ch === '"') inQuotes = true;
+      else if (ch === delim) { out.push(cur); cur = ""; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out.map(v => v.trim());
+  }
+
+  input.addEventListener("change", () => handleFile(input.files[0]));
+  // Keyboard support: Enter or Space on the drop area opens the file picker
+  dropzone.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); }
+  });
+  document.getElementById("clearFile").addEventListener("click", () => { reset(); showError(""); });
+
+  ["dragenter", "dragover"].forEach(evt => dropzone.addEventListener(evt, e => {
+    e.preventDefault(); dropzone.classList.add("drag");
+  }));
+  ["dragleave", "drop"].forEach(evt => dropzone.addEventListener(evt, e => {
+    e.preventDefault(); dropzone.classList.remove("drag");
+  }));
+  dropzone.addEventListener("drop", e => {
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;   // put the dropped file into the real form input
+    handleFile(file);
+  });
+
+  // If the user comes back with the browser Back button, re-enable the button
+  window.addEventListener("pageshow", () => {
+    submitBtn.textContent = "Run quality check";
+    submitBtn.disabled = !(input.files && input.files.length);
+  });
+
+  document.getElementById("uploadForm").addEventListener("submit", () => {
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Analysing…";
+  });
+</script>
+</body>
+</html>

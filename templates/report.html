@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quality Report - {{ filename }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+{% set s = report.score %}
+{% set score_color = 'var(--pass)' if s >= 80 else ('var(--warn)' if s >= 50 else 'var(--fail)') %}
+{% set verdict = 'Ready for training' if s >= 80 else ('Needs cleaning' if s >= 50 else 'Not ready - major issues') %}
+{% set n_pass = report.checks | selectattr('status', 'equalto', 'pass') | list | length %}
+{% set n_warn = report.checks | selectattr('status', 'equalto', 'warn') | list | length %}
+{% set n_fail = report.checks | selectattr('status', 'equalto', 'fail') | list | length %}
+{% set n_skip = report.checks | selectattr('status', 'equalto', 'skip') | list | length %}
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="{{ url_for('index') }}"><span class="brand-mark">DQ</span> Dataset Quality Checker</a>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-dark-ghost" id="downloadJson" type="button">Download report (JSON)</button>
+      <a class="btn btn-primary" href="{{ url_for('index') }}">Check another file</a>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="report-head">
+    <div>
+      <h1>Validation report</h1>
+      <div class="file">{{ filename }}</div>
+    </div>
+  </div>
+
+  {% for w in warnings %}<div class="alert alert-warn">{{ w }}</div>{% endfor %}
+
+  {# ===== Summary ===== #}
+  <section class="summary">
+    <div class="card score-card">
+      <div class="ring">
+        <svg width="160" height="160" viewBox="0 0 160 160">
+          <circle cx="80" cy="80" r="70" fill="none" stroke="var(--line)" stroke-width="12"/>
+          <circle id="scoreArc" cx="80" cy="80" r="70" fill="none" stroke="{{ score_color }}" stroke-width="12"
+                  stroke-linecap="round" stroke-dasharray="439.82" stroke-dashoffset="439.82"
+                  data-target="{{ 439.82 * (1 - s / 100) }}" style="transition: stroke-dashoffset 1s ease-out;"/>
+        </svg>
+        <div class="value"><div><b style="color: {{ score_color }}">{{ s }}</b><br><span>out of 100</span></div></div>
+      </div>
+      <div class="verdict" style="color: {{ score_color }}">{{ verdict }}</div>
+      {% if not report.class_balance %}<div class="muted" style="font-size:12px; margin-top:4px;">Class balance not included in score</div>{% endif %}
+    </div>
+
+    <div class="card">
+      <div class="stats">
+        <div class="stat"><div class="k">Rows</div><div class="v">{{ "{:,}".format(report.basic.rows) }}</div></div>
+        <div class="stat"><div class="k">Columns</div><div class="v">{{ report.basic.columns }}</div></div>
+        <div class="stat"><div class="k">Numeric</div><div class="v">{{ report.basic.numeric_columns }}</div></div>
+        <div class="stat"><div class="k">Memory</div><div class="v">{{ report.basic.memory }}</div></div>
+      </div>
+      <div class="status-counts">
+        <span class="badge b-pass">{{ n_pass }} passed</span>
+        <span class="badge b-warn">{{ n_warn }} warnings</span>
+        <span class="badge b-fail">{{ n_fail }} failed</span>
+        {% if n_skip %}<span class="badge b-skip">{{ n_skip }} skipped</span>{% endif %}
+      </div>
+      <h3 style="font-size:15px; margin:18px 0 8px;">What to fix</h3>
+      <ol class="recs">
+        {% for r in report.recommendations %}<li>{{ r }}</li>{% endfor %}
+      </ol>
+    </div>
+  </section>
+
+  {# ===== Tabs ===== #}
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="checks">Validation checks</button>
+    <button class="tab" data-tab="profile">Column profile</button>
+    <button class="tab" data-tab="preview">Data preview</button>
+  </nav>
+
+  {# ----- Tab 1: checks ----- #}
+  <section class="panel active" id="panel-checks">
+    <div class="filters">
+      <button class="pill active" data-filter="all">All ({{ report.checks | length }})</button>
+      <button class="pill" data-filter="fail">Failed ({{ n_fail }})</button>
+      <button class="pill" data-filter="warn">Warnings ({{ n_warn }})</button>
+      <button class="pill" data-filter="pass">Passed ({{ n_pass }})</button>
+    </div>
+
+    {% for c in report.checks %}
+    <div class="check s-{{ c.status }} {% if c.status in ['fail', 'warn'] %}open{% endif %}" data-status="{{ c.status }}">
+      <button class="check-head" type="button">
+        <div>
+          <h3>{{ c.name }}</h3>
+          <p>{{ c.summary }}</p>
+        </div>
+        <span class="badge b-{{ c.status }}">{{ c.status }}</span>
+        <span class="chev">▾</span>
+      </button>
+      <div class="check-body">
+
+        {% if c.id == 'missing' %}
+          {% if report.missing %}
+            <div class="table-scroll"><table class="data">
+              <thead><tr><th>Column</th><th>Missing</th><th>Share of rows</th></tr></thead>
+              <tbody>{% for m in report.missing %}
+                <tr><td class="mono">{{ m.column }}</td><td class="num">{{ m.missing }}</td>
+                  <td><div class="bar-cell"><div class="bar"><i style="width: {{ m.percent }}%"></i></div><span class="mono">{{ m.percent }}%</span></div></td></tr>
+              {% endfor %}</tbody>
+            </table></div>
+          {% else %}<p class="ok-msg">Every cell has a value.</p>{% endif %}
+
+        {% elif c.id == 'size' %}
+          <p class="{{ 'ok-msg' if c.status == 'pass' else '' }}" style="margin:0;">
+            {% if c.status == 'pass' %}Enough rows for the other checks to be meaningful.
+            {% else %}With very few rows, results such as constant columns, outliers and correlations can be misleading. Treat this report as a rough guide only.{% endif %}
+          </p>
+
+        {% elif c.id == 'duplicates' %}
+          <p class="{{ 'ok-msg' if not report.duplicates.count else '' }}" style="margin:0;">
+            {% if report.duplicates.count %}
+              {{ report.duplicates.count }} rows are exact copies of an earlier row. Duplicates make a model look more accurate than it is, because the same rows can end up in both the training and test sets.
+            {% else %}Every row is unique.{% endif %}
+          </p>
+
+        {% elif c.id == 'constant' %}
+          {% if report.constant %}
+            <div class="table-scroll"><table class="data">
+              <thead><tr><th>Column</th><th>Type</th><th>Most common value share</th></tr></thead>
+              <tbody>{% for x in report.constant %}
+                <tr><td class="mono">{{ x.column }}</td><td>{{ x.type }}</td><td class="num">{{ x.top_share }}%</td></tr>
+              {% endfor %}</tbody>
+            </table></div>
+          {% else %}<p class="ok-msg">No constant columns.</p>{% endif %}
+
+        {% elif c.id == 'infinite' %}
+          {% if report.infinite %}
+            <div class="table-scroll"><table class="data">
+              <thead><tr><th>Column</th><th>Infinite values</th></tr></thead>
+              <tbody>{% for x in report.infinite %}
+                <tr><td class="mono">{{ x.column }}</td><td class="num">{{ x.count }}</td></tr>
+              {% endfor %}</tbody>
+            </table></div>
+          {% else %}<p class="ok-msg">All numeric values are finite.</p>{% endif %}
+
+        {% elif c.id == 'outliers' %}
+          {% if report.outliers %}
+            <div class="table-scroll"><table class="data">
+              <thead><tr><th>Column</th><th>Outliers</th><th>%</th><th>Normal range</th></tr></thead>
+              <tbody>{% for x in report.outliers %}
+                <tr><td class="mono">{{ x.column }}</td><td class="num">{{ x.count }}</td><td class="num">{{ x.percent }}%</td>
+                  <td class="num">{{ x.low }} … {{ x.high }}</td></tr>
+              {% endfor %}</tbody>
+            </table></div>
+          {% else %}<p class="ok-msg">No values outside the normal range.</p>{% endif %}
+
+        {% elif c.id == 'class_balance' %}
+          {% if report.class_balance %}
+            <div class="chart-box"><canvas id="classChart"></canvas></div>
+            <div class="table-scroll"><table class="data">
+              <thead><tr><th>Class</th><th>Rows</th><th>%</th></tr></thead>
+              <tbody>{% for x in report.class_balance.classes %}
+                <tr><td class="mono">{{ x.label }}</td><td class="num">{{ x.count }}</td><td class="num">{{ x.percent }}%</td></tr>
+              {% endfor %}</tbody>
+            </table></div>
+          {% else %}<p class="muted" style="margin:0;">Go back and choose a label column to include this check.</p>{% endif %}
+
+        {% elif c.id == 'correlations' %}
+          {% if report.correlations %}
+            <div class="table-scroll"><table class="data">
+              <thead><tr><th>Feature A</th><th>Feature B</th><th>|r|</th></tr></thead>
+              <tbody>{% for x in report.correlations %}
+                <tr><td class="mono">{{ x.column_a }}</td><td class="mono">{{ x.column_b }}</td><td class="num">{{ x.correlation }}</td></tr>
+              {% endfor %}</tbody>
+            </table></div>
+          {% else %}<p class="ok-msg">No redundant feature pairs.</p>{% endif %}
+        {% endif %}
+
+      </div>
+    </div>
+    {% endfor %}
+    <p id="noChecks" class="muted" style="display:none; padding: 12px 4px;">No checks in this category.</p>
+  </section>
+
+  {# ----- Tab 2: column profile ----- #}
+  <section class="panel" id="panel-profile">
+    <input class="search" id="colSearch" type="search" placeholder="Search columns…">
+    <div class="table-scroll"><table class="data" id="profileTable">
+      <thead><tr>
+        <th data-sort="text">Column</th><th data-sort="text">Type</th>
+        <th data-sort="num">Missing</th><th data-sort="num">Unique</th><th>Examples</th>
+      </tr></thead>
+      <tbody>{% for p in report.profile %}
+        <tr>
+          <td class="mono">{{ p.column }}</td>
+          <td class="muted">{{ p.dtype }}</td>
+          <td data-value="{{ p.missing_pct }}"><div class="bar-cell"><div class="bar"><i style="width: {{ p.missing_pct }}%"></i></div><span class="mono">{{ p.missing_pct }}%</span></div></td>
+          <td class="num" data-value="{{ p.unique }}">{{ p.unique }}</td>
+          <td class="muted">{{ p.examples | join(', ') }}</td>
+        </tr>
+      {% endfor %}</tbody>
+    </table></div>
+    <p class="muted" style="font-size:13px;">Click a column heading to sort.</p>
+  </section>
+
+  {# ----- Tab 3: data preview ----- #}
+  <section class="panel" id="panel-preview">
+    <p class="muted" style="margin-top:0;">First {{ preview_rows | length }} rows. Empty cells are highlighted.</p>
+    <div class="table-scroll"><table class="data">
+      <thead><tr>{% for col in preview_columns %}<th>{{ col }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in preview_rows %}
+        <tr>{% for v in row %}<td class="{{ 'empty' if v == '' else 'num' }}">{{ v }}</td>{% endfor %}</tr>
+      {% endfor %}</tbody>
+    </table></div>
+  </section>
+</main>
+
+<footer>Built with Python, Flask and pandas · Saba Nawaz</footer>
+
+<script id="reportData" type="application/json">{{ report | tojson }}</script>
+<script>
+  // Animate the score ring
+  const arc = document.getElementById("scoreArc");
+  requestAnimationFrame(() => setTimeout(() => arc.style.strokeDashoffset = arc.dataset.target, 50));
+
+  // Tabs
+  document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+    tab.classList.add("active");
+    document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
+  }));
+
+  // Expand / collapse checks
+  document.querySelectorAll(".check-head").forEach(head =>
+    head.addEventListener("click", () => head.parentElement.classList.toggle("open")));
+
+  // Status filter
+  document.querySelectorAll(".pill").forEach(pill => pill.addEventListener("click", () => {
+    document.querySelectorAll(".pill").forEach(p => p.classList.remove("active"));
+    pill.classList.add("active");
+    const f = pill.dataset.filter;
+    let shown = 0;
+    document.querySelectorAll(".check").forEach(c => {
+      const show = f === "all" || c.dataset.status === f;
+      c.style.display = show ? "" : "none";
+      if (show) shown++;
+    });
+    document.getElementById("noChecks").style.display = shown ? "none" : "block";
+  }));
+
+  // Column search
+  document.getElementById("colSearch").addEventListener("input", e => {
+    const q = e.target.value.toLowerCase();
+    document.querySelectorAll("#profileTable tbody tr").forEach(tr => {
+      tr.style.display = tr.cells[0].textContent.toLowerCase().includes(q) ? "" : "none";
+    });
+  });
+
+  // Column sort
+  document.querySelectorAll("#profileTable th[data-sort]").forEach((th, idx) => {
+    th.style.cursor = "pointer";
+    let asc = true;
+    th.addEventListener("click", () => {
+      const col = th.cellIndex;
+      const tbody = document.querySelector("#profileTable tbody");
+      const rows = [...tbody.rows];
+      rows.sort((a, b) => {
+        const A = a.cells[col], B = b.cells[col];
+        const r = th.dataset.sort === "num"
+          ? parseFloat(A.dataset.value) - parseFloat(B.dataset.value)
+          : A.textContent.localeCompare(B.textContent);
+        return asc ? r : -r;
+      });
+      asc = !asc;
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+
+  // Download the full report as JSON
+  document.getElementById("downloadJson").addEventListener("click", () => {
+    const data = document.getElementById("reportData").textContent;
+    const blob = new Blob([JSON.stringify(JSON.parse(data), null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = {{ (filename.rsplit('.', 1)[0] ~ '_quality_report.json') | tojson }};
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  // Class balance chart
+  {% if report.class_balance %}
+  if (!window.Chart) document.querySelector('.chart-box').style.display = 'none';
+  else new Chart(document.getElementById("classChart"), {
+    type: "bar",
+    data: {
+      labels: {{ report.class_balance.classes | map(attribute='label') | list | tojson }},
+      datasets: [{
+        data: {{ report.class_balance.classes | map(attribute='count') | list | tojson }},
+        backgroundColor: "#2f5bea",
+        borderRadius: 6,
+        maxBarThickness: 64
+      }]
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } }, x: { grid: { display: false } } }
+    }
+  });
+  {% endif %}
+</script>
+</body>
+</html>
