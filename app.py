@@ -7,7 +7,7 @@ import io
 import os
 
 import pandas as pd
-from flask import Flask, render_template, request
+from flask import Flask, redirect, render_template, request, url_for
 
 from analyzer import analyze
 
@@ -92,6 +92,12 @@ def render_report(df, filename, label_col, notes=None):
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html", has_sample=os.path.exists(SAMPLE_FILE))
+
+
+@app.route("/analyze", methods=["GET"])
+def analyze_get():
+    """Someone opened /analyze directly (bookmark, shared or copied link): send them to the upload page."""
+    return redirect(url_for("index"))
 
 
 @app.route("/analyze", methods=["POST"])
